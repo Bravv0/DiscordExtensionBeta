@@ -28,7 +28,7 @@ using ConVar;
 
 namespace Oxide.Plugins
 {
-    [Info("Discord Chat", "MJSU", "2.0.0")]
+    [Info("Discord Chat", "MJSU", "2.0.1")]
     [Description("Allows chatting through discord")]
     internal class DiscordChat : CovalencePlugin
     {
@@ -435,6 +435,12 @@ namespace Oxide.Plugins
                 HandleUnlinkedPlayerMessage(message.Author, sb, message);
                 return;
             }
+            
+            if (BetterChatMute?.Call<bool>("API_IsMuted", player) ?? false)
+            {
+                message.DeleteMessage(_client);
+                return;
+            }
 
             if (IsInAdminDeepCover(player))
             {
@@ -728,7 +734,26 @@ namespace Oxide.Plugins
                 return true;
             }
 
-            return _pluginConfig.MessageSettings.Filter.IgnoreUsers.Contains(user.Id);
+            var filter = _pluginConfig.MessageSettings.Filter;
+
+            if (filter.IgnoreUsers.Contains(user.Id))
+            {
+                return true;
+            }
+
+            GuildMember member = _guild.Members[user.Id];
+            if (member != null)
+            {
+                foreach (Snowflake role in filter.IgnoreRoles)
+                {
+                    if (member.Roles.Contains(role))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         public bool IsLoaded(Plugin plugin) => plugin != null && plugin.IsLoaded;
@@ -849,6 +874,9 @@ namespace Oxide.Plugins
         {
             [JsonProperty("Ignore messages from users in this list (Discord ID)")]
             public List<Snowflake> IgnoreUsers { get; set; } = new List<Snowflake>();
+            
+            [JsonProperty("Ignore messages from users in this role (Role ID)")]
+            public List<Snowflake> IgnoreRoles { get; set; } = new List<Snowflake>();
 
             [JsonProperty("Ignored Prefixes")]
             public List<string> IgnoredPrefixes { get; set; } = new List<string>();

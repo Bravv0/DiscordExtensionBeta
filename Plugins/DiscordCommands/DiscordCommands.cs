@@ -1,0 +1,403 @@
+﻿using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Linq;
+using System.Text;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
+using Oxide.Core;
+using Oxide.Core.Libraries.Covalence;
+using Oxide.Core.Plugins;
+using Oxide.Ext.Discord;
+using Oxide.Ext.Discord.Attributes;
+using Oxide.Ext.Discord.Constants;
+using Oxide.Ext.Discord.Entities;
+using Oxide.Ext.Discord.Entities.Gatway;
+using Oxide.Ext.Discord.Entities.Gatway.Events;
+using Oxide.Ext.Discord.Entities.Guilds;
+using Oxide.Ext.Discord.Entities.Messages;
+using Oxide.Ext.Discord.Libraries.Command;
+using Oxide.Ext.Discord.Logging;
+
+namespace Oxide.Plugins
+{
+    [Info("Discord Commands", "MJSU", "2.0.0")]
+    [Description("Allows using discord to execute commands")]
+    internal class DiscordCommands : CovalencePlugin
+    {
+        #region Class Fields
+        [DiscordClient] private DiscordClient _client;
+
+        private PluginConfig _pluginConfig; //Plugin Config
+
+        private const string UsePermission = "discordcommands.use";
+
+        private readonly DiscordCommand _dcCommands = Interface.Oxide.GetLibrary<DiscordCommand>();
+
+        private readonly DiscordSettings _discordSettings = new DiscordSettings
+        {
+            Intents = GatewayIntents.Guilds | GatewayIntents.GuildMembers
+        };
+
+        private readonly Hash<Snowflake, StringBuilder> _playerLogs = new Hash<Snowflake, StringBuilder>();
+        private DiscordGuild _guild;
+
+        private bool _logActive;
+        
+        private enum RestrictionMode {Blacklist, Whitelist}
+        #endregion
+
+        #region Setup & Loading
+        private void Init()
+        {
+            permission.RegisterPermission(UsePermission, this);
+
+            _discordSettings.ApiToken = _pluginConfig.DiscordApiKey;
+            _discordSettings.LogLevel = _pluginConfig.ExtensionDebugging;
+
+            if (_pluginConfig.CommandSettings.AllowInDm)
+            {
+                _discordSettings.Intents |= GatewayIntents.DirectMessages;
+            }
+            
+            if (_pluginConfig.CommandSettings.AllowInGuild)
+            {
+                _discordSettings.Intents |= GatewayIntents.GuildMessages;
+            }
+
+            if (_pluginConfig.CommandSettings.Restrictions.EnableRestrictions)
+            {
+                foreach (string command in _pluginConfig.CommandSettings.Restrictions.Restrictions.Keys.ToList())
+                {
+                    _pluginConfig.CommandSettings.Restrictions.Restrictions[command.ToLower()] = _pluginConfig.CommandSettings.Restrictions.Restrictions[command];
+                }
+            }
+        }
+
+        protected override void LoadDefaultMessages()
+        {
+            lang.RegisterMessages(new Dictionary<string, string>
+            {
+                [LangKeys.NoPermission] = "You do not have permission to use this command",
+                [LangKeys.Blacklisted] = "This command is blacklisted and you do not have permission to use it.",
+                [LangKeys.WhiteListedNotAdded] = "This command is not added to the command whitelist and cannot be used.",
+                [LangKeys.WhiteListedNoPermission] = "You do not have the whitelisted permission to use this command.",
+                [LangKeys.CommandInfoText] = "To execute a command on the server",
+                [LangKeys.RanCommand] = "Ran Command: {0}",
+                [LangKeys.ExecCommand] = "exec",
+                [LangKeys.CommandLogging] = "{0} ran command '{1}'",
+                [LangKeys.CommandHelpText] = "Send commands to the rust server:\n" +
+                                             "Type /{0} {{command}} - to execute that command on the server\n" +
+                                             "Example: /{0} o.reload DiscordCommand"
+            }, this);
+        }
+
+        protected override void LoadDefaultConfig()
+        {
+            PrintWarning("Loading Default Config");
+        }
+
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            Config.Settings.DefaultValueHandling = DefaultValueHandling.Populate;
+            _pluginConfig = AdditionalConfig(Config.ReadObject<PluginConfig>());
+            Config.WriteObject(_pluginConfig);
+        }
+
+        private PluginConfig AdditionalConfig(PluginConfig config)
+        {
+            config.CommandSettings = config.CommandSettings ?? new CommandSettings();
+            config.LogSettings = config.LogSettings ?? new LogSettings();
+            return config;
+        }
+
+        private void OnServerInitialized()
+        {
+            if (string.IsNullOrEmpty(_pluginConfig.DiscordApiKey))
+            {
+                PrintWarning("Please set the Discord Bot Token and reload the plugin");
+                return;
+            }
+            
+            RegisterDiscordLangCommand(nameof(ExecCommand), LangKeys.ExecCommand, _pluginConfig.CommandSettings.AllowInDm, _pluginConfig.CommandSettings.AllowInGuild, _pluginConfig.CommandSettings.AllowedChannels);
+            _client.Connect(_discordSettings);
+        }
+
+        private void Unload()
+        {
+            UnityEngine.Application.logMessageReceived -= HandleCommandLog;
+        }
+        
+        [HookMethod(DiscordHooks.OnDiscordGatewayReady)]
+        private void OnDiscordGatewayReady(GatewayReadyEvent ready)
+        {
+            Puts("Discord Commands Ready");
+            _guild = ready.Guilds[_pluginConfig.GuildId];
+        }
+        #endregion
+
+        #region Discord Chat Command
+        private void ExecCommand(DiscordMessage message, string cmd, string[] args)
+        {
+            IPlayer player = message.Author.Player;
+            GuildMember member = _guild.Members[message.Author.Id];
+            if (player != null && !player.HasPermission(UsePermission) || member != null && member.Roles.All(r => !_pluginConfig.CommandSettings.AllowedRoles.Contains(r)))
+            {
+                message.Reply(_client, Lang(LangKeys.NoPermission, player));
+                return;
+            }
+
+            if (args.Length == 0)
+            {
+                message.Reply(_client, Lang(LangKeys.CommandHelpText, player, Lang(LangKeys.ExecCommand, player)));
+                return;
+            }
+            
+            string command = args[0];
+            string[] commandArgs = args.Skip(1).ToArray();
+            string commandString = string.Join(" ", args);
+
+            if (CanRunCommand(message, command, player, member))
+            {
+                RunCommand(message, command, commandArgs, player, member, commandString);
+            }
+        }
+
+        private bool CanRunCommand(DiscordMessage message, string command, IPlayer player, GuildMember member)
+        {
+            CommandRestrictions restrictions = _pluginConfig.CommandSettings.Restrictions;
+            if (restrictions.EnableRestrictions)
+            {
+                if (restrictions.RestrictionMode == RestrictionMode.Blacklist && restrictions.Restrictions.ContainsKey(command.ToLower()))
+                {
+                    RestrictionSettings restriction = restrictions.Restrictions[command.ToLower()];
+                    if (!IsPlayerAllowed(player, member, restriction))
+                    {
+                        message.Reply(_client, Lang(LangKeys.Blacklisted, player));
+                        return false;
+                    }
+                }
+                else if (restrictions.RestrictionMode == RestrictionMode.Whitelist)
+                {
+                    if (!restrictions.Restrictions.ContainsKey(command.ToLower()))
+                    {
+                        message.Reply(_client, Lang(LangKeys.WhiteListedNotAdded, player));
+                        return false;
+                    }
+
+                    RestrictionSettings restriction = restrictions.Restrictions[command.ToLower()];
+                    if (!IsPlayerAllowed(player, member, restriction))
+                    {
+                        message.Reply(_client, Lang(LangKeys.WhiteListedNoPermission, player));
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsPlayerAllowed(IPlayer player, GuildMember member, RestrictionSettings restriction)
+        {
+            bool allowed = false;
+            if (player != null)
+            {
+                foreach (string allowedPerm in restriction.AllowedPermissions)
+                {
+                    if (player.HasPermission(allowedPerm))
+                    {
+                        allowed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!allowed && member != null)
+            {
+                foreach (Snowflake roleId in member.Roles)
+                {
+                    if (restriction.AllowedRoles.Contains(roleId))
+                    {
+                        allowed = true;
+                        break;
+                    }
+                }
+            }
+
+            return allowed;
+        }
+
+        private void RunCommand(DiscordMessage message, string command, string[] commandArgs, IPlayer player, GuildMember member, string commandString)
+        {
+            if (_pluginConfig.LogSettings.DisplayServerLog)
+            {
+                if (!_logActive)
+                {
+                    UnityEngine.Application.logMessageReceived += HandleCommandLog;
+                    _logActive = true;
+                }
+
+                _playerLogs[message.Id] = new StringBuilder();
+
+                timer.In(_pluginConfig.LogSettings.DisplayServerLogDuration, () =>
+                {
+                    StringBuilder sb = _playerLogs[message.Id];
+                    message.Reply(_client, sb.ToString());
+                    _playerLogs.Remove(message.Id);
+
+                    if (_playerLogs.Count == 0)
+                    {
+                        UnityEngine.Application.logMessageReceived -= HandleCommandLog;
+                        _logActive = false;
+                    }
+                });
+            }
+
+            server.Command(command, commandArgs);
+            message.Reply(_client, Lang(LangKeys.RanCommand, player, commandString));
+
+            string log = Lang(LangKeys.CommandLogging, player, player?.Name ?? member?.Nickname ?? $"{member?.User.Username}#{member?.User.Discriminator}", commandString);
+
+            if (_pluginConfig.LogSettings.LoggingChannel.IsValid())
+            {
+                DiscordMessage.CreateMessage(_client, _pluginConfig.LogSettings.LoggingChannel, log);
+            }
+
+            if (_pluginConfig.LogSettings.LogToConsole)
+            {
+                Puts(log);
+            }
+        }
+
+        #endregion
+
+        #region Log Handler
+        private void HandleCommandLog(string message, string stackTrace, UnityEngine.LogType type)
+        {
+            foreach (StringBuilder sb in _playerLogs.Values)
+            {
+                sb.AppendLine(message);
+            }
+        }
+        #endregion
+
+        #region Helper Methods
+        public void RegisterDiscordLangCommand(string command, string langKey, bool direct, bool guild, List<Snowflake> allowedChannels)
+        {
+            if (direct)
+            {
+                _dcCommands.AddDirectMessageLocalizedCommand(langKey, this, command);
+            }
+
+            if (guild)
+            {
+                _dcCommands.AddGuildLocalizedCommand(langKey, this, allowedChannels, command);
+            }
+        }
+
+        public string Lang(string key, IPlayer player = null, params object[] args)
+        {
+            try
+            {
+                return string.Format(lang.GetMessage(key, this, player?.Id), args);
+            }
+            catch (Exception ex)
+            {
+                PrintError($"Lang Key '{key}' threw exception\n:{ex}");
+                throw;
+            }
+        }
+        #endregion
+
+        #region Classes
+        private class PluginConfig
+        {
+            [DefaultValue("")]
+            [JsonProperty(PropertyName = "Discord Bot Token")]
+            public string DiscordApiKey { get; set; }
+            
+            [JsonProperty(PropertyName = "Discord Server ID")]
+            public Snowflake GuildId { get; set; }
+
+            [JsonProperty(PropertyName = "Command Settings")]
+            public CommandSettings CommandSettings { get; set; }
+
+            [JsonProperty(PropertyName = "Log Settings")]
+            public LogSettings LogSettings { get; set; }
+
+            [JsonConverter(typeof(StringEnumConverter))]
+            [DefaultValue(LogLevel.Info)]
+            [JsonProperty(PropertyName = "Discord Extension Log Level (Verbose, Debug, Info, Warning, Error, Exception, Off)")]
+            public LogLevel ExtensionDebugging { get; set; }
+            }
+        
+        private class LogSettings 
+        {
+            [JsonProperty(PropertyName = "Command Usage Logging Channel ID")]
+            public Snowflake LoggingChannel { get; set; }
+
+            [JsonProperty(PropertyName = "Log command usage in server console")]
+            public bool LogToConsole { get; set; } = true;
+            
+            [JsonProperty(PropertyName = "Display Server Log Messages to user after running command")]
+            public bool DisplayServerLog { get; set; } = true;
+            
+            [JsonProperty(PropertyName = "Display Server Log Messages Duration (Seconds)")]
+            public float DisplayServerLogDuration { get; set; } = 1;
+        }
+
+        private class CommandSettings
+        {
+            [JsonProperty(PropertyName = "Allow Discord Commands In Direct Messages")]
+            public bool AllowInDm { get; set; } = true;
+            
+            [JsonProperty(PropertyName = "Allow Discord Commands In Guild")]
+            public bool AllowInGuild { get; set; } = false;
+
+            [JsonProperty(PropertyName = "Allow Guild Commands Only In The Following Guild Channel Or Category (Channel ID Or Category ID)")]
+            public List<Snowflake> AllowedChannels { get; set; } = new List<Snowflake>();
+
+            [JsonProperty(PropertyName = "Allow Guild Commands for members having role (Role ID)")]
+            public List<Snowflake> AllowedRoles { get; set; } = new List<Snowflake>();
+
+            public CommandRestrictions Restrictions { get; set; } = new CommandRestrictions();
+        }
+
+        private class CommandRestrictions
+        {
+            [JsonProperty(PropertyName = "Enable Command Restrictions")]
+            public bool EnableRestrictions { get; set; } = false;
+
+            [JsonProperty(PropertyName = "Blacklist = listed commands cannot be used without permission, Whitelist = Cannot use any commands unless listed and have permission")]
+            [JsonConverter(typeof(StringEnumConverter))]
+            public RestrictionMode RestrictionMode { get; set; } = RestrictionMode.Blacklist;
+
+            [JsonProperty(PropertyName = "Command Restrictions")]
+            public Hash<string, RestrictionSettings> Restrictions { get; set; } = new Hash<string, RestrictionSettings>();
+        }
+
+        private class RestrictionSettings
+        {
+            [JsonProperty(PropertyName = "Allowed Discord Roles")]
+            public List<Snowflake> AllowedRoles { get; set; } = new List<Snowflake>();
+
+            [JsonProperty(PropertyName = "Allowed Server Permissions")]
+            public List<string> AllowedPermissions { get; set; } = new List<string>();
+        }
+
+        private static class LangKeys
+        {
+            public const string CommandInfoText = nameof(CommandInfoText);
+            public const string CommandHelpText = nameof(CommandHelpText) + "V2";
+            public const string RanCommand = nameof(RanCommand);
+            public const string CommandLogging = nameof(CommandLogging);
+            public const string ExecCommand = nameof(ExecCommand);
+            public const string NoPermission = nameof(NoPermission);
+            public const string Blacklisted = nameof(Blacklisted);
+            public const string WhiteListedNotAdded = nameof(WhiteListedNotAdded);
+            public const string WhiteListedNoPermission = nameof(WhiteListedNoPermission);
+        }
+        #endregion
+    }
+}

@@ -24,7 +24,7 @@ using Oxide.Ext.Discord.Logging;
 
 namespace Oxide.Plugins
 {
-    [Info("Discord Roles", "MJSU", "2.0.0")]
+    [Info("Discord Roles", "MJSU", "2.0.1")]
     [Description("Syncs players oxide group with discord roles")]
     class DiscordRoles : CovalencePlugin
     {
@@ -517,6 +517,11 @@ namespace Oxide.Plugins
         {
             IPlayer player = sync.Player;
             if (!_pluginConfig.SyncNicknames || sync.IsLeaving)
+            {
+                return;
+            }
+
+            if (sync.Member.User.Id == _guild.OwnerId)
             {
                 return;
             }

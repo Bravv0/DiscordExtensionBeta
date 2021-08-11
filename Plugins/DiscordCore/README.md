@@ -1,6 +1,9 @@
 ﻿## Features
 
-* Creates a secure link between an in game player and a Discord user in your Discord server. This link can be accessed by any Discord Link compatible plugin.
+* Creates a secure link between an in game player and a Discord user in your Discord server. 
+* This link can be accessed by any Discord Link compatible plugin.
+
+**Note:** This plugin only performs discord link functionality and should not be loaded otherwise.
 
 ## Permissions
 
@@ -37,20 +40,25 @@
    "Discord Server Join Code": "",
    "Enable Discord Server Welcome DM Message": true,
    "Link Settings": {
-      "Enable Linking Discord And Game Accounts": false,
       "Link Code Generator Characters": "123456789",
       "Link Code Length": 6,
       "Allow Commands To Be Used In Guild Channels": false,
       "Allow Guild Commands Only In The Following Guild Channel Or Category (Channel ID Or Category ID)": [],
       "Link / Unlink Announcement Channel Id": "",
       "Guild Link Message Settings": {
-         "Enable Reaction Message": false,
+         "Enable Guild Link Message": false,
          "Message Channel ID": ""
       }
    },
    "Discord Extension Log Level (Verbose, Debug, Info, Warning, Error, Exception, Off)": "Debug"
 }
 ```
+
+### Guild Link Message
+Guild link message will place a message in your discord channel with a button users can use to start the linking process.
+The players will be sent a message in the same channel that only they can see and isn't displayed to any other users.
+
+![](https://i.postimg.cc/fbky50pw/link-example.png)
 
 ## Localization
 ```json
