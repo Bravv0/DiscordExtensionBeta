@@ -51,10 +51,10 @@ namespace Oxide.Plugins
         private void Init()
         {
             permission.RegisterPermission(UsePermission, this);
-
+            
             _discordSettings.ApiToken = _pluginConfig.DiscordApiKey;
             _discordSettings.LogLevel = _pluginConfig.ExtensionDebugging;
-
+            
             if (_pluginConfig.CommandSettings.AllowInDm)
             {
                 _discordSettings.Intents |= GatewayIntents.DirectMessages;
@@ -64,11 +64,12 @@ namespace Oxide.Plugins
             {
                 _discordSettings.Intents |= GatewayIntents.GuildMessages;
             }
-
+            
             if (_pluginConfig.CommandSettings.Restrictions.EnableRestrictions)
             {
                 foreach (string command in _pluginConfig.CommandSettings.Restrictions.Restrictions.Keys.ToList())
                 {
+                    Puts("F");
                     _pluginConfig.CommandSettings.Restrictions.Restrictions[command.ToLower()] = _pluginConfig.CommandSettings.Restrictions.Restrictions[command];
                 }
             }
@@ -107,8 +108,8 @@ namespace Oxide.Plugins
 
         private PluginConfig AdditionalConfig(PluginConfig config)
         {
-            config.CommandSettings = config.CommandSettings ?? new CommandSettings();
-            config.LogSettings = config.LogSettings ?? new LogSettings();
+            config.CommandSettings = new CommandSettings(config.CommandSettings);
+            config.LogSettings = new LogSettings(config.LogSettings);
             return config;
         }
 
@@ -133,7 +134,23 @@ namespace Oxide.Plugins
         private void OnDiscordGatewayReady(GatewayReadyEvent ready)
         {
             Puts("Discord Commands Ready");
-            _guild = ready.Guilds[_pluginConfig.GuildId];
+            
+            _guild = null;
+            if (ready.Guilds.Count == 1 && !_pluginConfig.GuildId.IsValid())
+            {
+                _guild = ready.Guilds.Values.FirstOrDefault();
+            }
+
+            if (_guild == null)
+            {
+                _guild = ready.Guilds[_pluginConfig.GuildId];
+            }
+
+            if (_guild == null)
+            {
+                PrintError("Failed to find a matching guild for the Discord Server Id. " +
+                           "Please make sure your guild Id is correct and the bot is in the discord server.");
+            }
         }
         #endregion
 
@@ -142,7 +159,7 @@ namespace Oxide.Plugins
         {
             IPlayer player = message.Author.Player;
             GuildMember member = _guild.Members[message.Author.Id];
-            if (player != null && !player.HasPermission(UsePermission) || member != null && member.Roles.All(r => !_pluginConfig.CommandSettings.AllowedRoles.Contains(r)))
+            if (!HasCommandPermissions(message))
             {
                 message.Reply(_client, Lang(LangKeys.NoPermission, player));
                 return;
@@ -158,10 +175,34 @@ namespace Oxide.Plugins
             string[] commandArgs = args.Skip(1).ToArray();
             string commandString = string.Join(" ", args);
 
-            if (CanRunCommand(message, command, player, member))
+            if (!CanRunCommand(message, command, player, member))
             {
-                RunCommand(message, command, commandArgs, player, member, commandString);
+                return;
             }
+            
+            RunCommand(message, command, commandArgs, player, member, commandString);
+        }
+        
+        public bool HasCommandPermissions(DiscordMessage message)
+        {
+            IPlayer player = message.Author.Player;
+            if (player != null && player.HasPermission(UsePermission))
+            {
+                return true;
+            }
+
+            if (message.Member != null)
+            {
+                foreach (Snowflake role in _pluginConfig.CommandSettings.AllowedRoles)
+                {
+                    if (message.Member.Roles.Contains(role))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private bool CanRunCommand(DiscordMessage message, string command, IPlayer player, GuildMember member)
@@ -203,9 +244,9 @@ namespace Oxide.Plugins
             bool allowed = false;
             if (player != null)
             {
-                foreach (string allowedPerm in restriction.AllowedPermissions)
+                foreach (string group in restriction.AllowedGroups)
                 {
-                    if (player.HasPermission(allowedPerm))
+                    if (player.BelongsToGroup(group))
                     {
                         allowed = true;
                         break;
@@ -243,6 +284,11 @@ namespace Oxide.Plugins
                 timer.In(_pluginConfig.LogSettings.DisplayServerLogDuration, () =>
                 {
                     StringBuilder sb = _playerLogs[message.Id];
+                    //Message content length is 2k characters
+                    if (sb.Length > 2000)
+                    {
+                        sb.Length = 2000;
+                    }
                     message.Reply(_client, sb.ToString());
                     _playerLogs.Remove(message.Id);
 
@@ -317,7 +363,7 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Discord Bot Token")]
             public string DiscordApiKey { get; set; }
             
-            [JsonProperty(PropertyName = "Discord Server ID")]
+            [JsonProperty(PropertyName = "Discord Server ID (Optional if bot only in 1 guild)")]
             public Snowflake GuildId { get; set; }
 
             [JsonProperty(PropertyName = "Command Settings")]
@@ -330,60 +376,91 @@ namespace Oxide.Plugins
             [DefaultValue(LogLevel.Info)]
             [JsonProperty(PropertyName = "Discord Extension Log Level (Verbose, Debug, Info, Warning, Error, Exception, Off)")]
             public LogLevel ExtensionDebugging { get; set; }
-            }
+        }
         
         private class LogSettings 
         {
+            [JsonProperty(PropertyName = "Log command usage in server console")]
+            public bool LogToConsole { get; set; }
+            
             [JsonProperty(PropertyName = "Command Usage Logging Channel ID")]
             public Snowflake LoggingChannel { get; set; }
 
-            [JsonProperty(PropertyName = "Log command usage in server console")]
-            public bool LogToConsole { get; set; } = true;
-            
             [JsonProperty(PropertyName = "Display Server Log Messages to user after running command")]
-            public bool DisplayServerLog { get; set; } = true;
+            public bool DisplayServerLog { get; set; }
             
             [JsonProperty(PropertyName = "Display Server Log Messages Duration (Seconds)")]
-            public float DisplayServerLogDuration { get; set; } = 1;
+            public float DisplayServerLogDuration { get; set; }
+
+            public LogSettings(LogSettings settings)
+            {
+                LogToConsole = settings?.LogToConsole ?? true;
+                LoggingChannel = settings?.LoggingChannel ?? default(Snowflake);
+                DisplayServerLog = settings?.DisplayServerLog ?? true;
+                DisplayServerLogDuration = settings?.DisplayServerLogDuration ?? 1f;
+            }
         }
 
         private class CommandSettings
         {
             [JsonProperty(PropertyName = "Allow Discord Commands In Direct Messages")]
-            public bool AllowInDm { get; set; } = true;
+            public bool AllowInDm { get; set; }
             
             [JsonProperty(PropertyName = "Allow Discord Commands In Guild")]
-            public bool AllowInGuild { get; set; } = false;
+            public bool AllowInGuild { get; set; }
 
             [JsonProperty(PropertyName = "Allow Guild Commands Only In The Following Guild Channel Or Category (Channel ID Or Category ID)")]
-            public List<Snowflake> AllowedChannels { get; set; } = new List<Snowflake>();
+            public List<Snowflake> AllowedChannels { get; set; }
 
-            [JsonProperty(PropertyName = "Allow Guild Commands for members having role (Role ID)")]
-            public List<Snowflake> AllowedRoles { get; set; } = new List<Snowflake>();
+            [JsonProperty(PropertyName = "Allow Commands for members having role (Role ID)")]
+            public List<Snowflake> AllowedRoles { get; set; }
 
-            public CommandRestrictions Restrictions { get; set; } = new CommandRestrictions();
+            public CommandRestrictions Restrictions { get; set; }
+
+            public CommandSettings(CommandSettings settings)
+            {
+                AllowInDm = settings?.AllowInDm ?? true;
+                AllowInGuild = settings?.AllowInGuild ?? false;
+                AllowedChannels = settings?.AllowedChannels ?? new List<Snowflake>();
+                AllowedRoles = settings?.AllowedRoles ??  new List<Snowflake>();
+                Restrictions = new CommandRestrictions(settings?.Restrictions);
+            }
         }
 
         private class CommandRestrictions
         {
             [JsonProperty(PropertyName = "Enable Command Restrictions")]
-            public bool EnableRestrictions { get; set; } = false;
+            public bool EnableRestrictions { get; set; }
 
             [JsonProperty(PropertyName = "Blacklist = listed commands cannot be used without permission, Whitelist = Cannot use any commands unless listed and have permission")]
             [JsonConverter(typeof(StringEnumConverter))]
-            public RestrictionMode RestrictionMode { get; set; } = RestrictionMode.Blacklist;
+            public RestrictionMode RestrictionMode { get; set; }
 
             [JsonProperty(PropertyName = "Command Restrictions")]
-            public Hash<string, RestrictionSettings> Restrictions { get; set; } = new Hash<string, RestrictionSettings>();
+            public Hash<string, RestrictionSettings> Restrictions { get; set; }
+
+            public CommandRestrictions(CommandRestrictions settings)
+            {
+                EnableRestrictions = settings?.EnableRestrictions ?? false;
+                RestrictionMode = settings?.RestrictionMode ?? RestrictionMode.Blacklist;
+                Restrictions = settings?.Restrictions ?? new Hash<string, RestrictionSettings>
+                {
+                    ["command"] = new RestrictionSettings
+                    {
+                        AllowedGroups = new List<string> { "admin" },
+                        AllowedRoles = new List<Snowflake> { new Snowflake(1234512321) }
+                    }
+                };
+            }
         }
 
         private class RestrictionSettings
         {
             [JsonProperty(PropertyName = "Allowed Discord Roles")]
-            public List<Snowflake> AllowedRoles { get; set; } = new List<Snowflake>();
+            public List<Snowflake> AllowedRoles { get; set; }
 
-            [JsonProperty(PropertyName = "Allowed Server Permissions")]
-            public List<string> AllowedPermissions { get; set; } = new List<string>();
+            [JsonProperty(PropertyName = "Allowed Server Groups")]
+            public List<string> AllowedGroups { get; set; }
         }
 
         private static class LangKeys

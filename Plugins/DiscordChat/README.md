@@ -4,6 +4,10 @@
 * Any Discord linked players who chat in that discord chat channel will have their chat displayed on the game server
 * All chat plugins that use the OnUserChat hook are supported as well as default game chat
 
+## Discord Link
+This plugin supports Discord Link provided by the Discord Extension.
+This plugin will work with any plugin that provides linked player data through Discord Link.
+
 ## Configuration
 
 ```json
@@ -30,6 +34,7 @@
     },
     "Message Filter Settings": {
       "Ignore messages from users in this list (Discord ID)": [],
+      "Ignore messages from users in this role (Role ID)": [],
       "Ignored Prefixes": []
     }
   },

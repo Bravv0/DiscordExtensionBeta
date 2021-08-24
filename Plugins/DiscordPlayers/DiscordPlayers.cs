@@ -113,26 +113,38 @@ namespace Oxide.Plugins
         #region Discord Chat Command
         private void DiscordPlayersMessageCommand(DiscordMessage message, string cmd, string[] args)
         {
-            if (_pluginConfig.RequiredLink)
+            if (_pluginConfig.RequirePermissions && !CanUseCommand(message))
             {
-                IPlayer player = message.Author.Player;
-                if (!message.GuildId.HasValue && player == null || !player.HasPermission(UsePermission))
-                {
-                    message.Reply(_client, Lang(LangKeys.NoPermission, message.Author.Player));
-                    return;
-                }
-            
-                if (message.GuildId.HasValue && !player.HasPermission(UsePermission) && (message.Member == null || message.Member.Roles.All(r => !_pluginConfig.AllowedRoles.Contains(r))))
-                {
-                    message.Reply(_client, Lang(LangKeys.NoPermission, message.Author.Player));
-                    return;
-                }
+                message.Reply(_client, Lang(LangKeys.NoPermission, message.Author.Player));
+                return;
             }
 
             foreach (string list in GetPlayers())
             {
                 message.Reply(_client, list);
             }
+        }
+
+        public bool CanUseCommand(DiscordMessage message)
+        {
+            IPlayer player = message.Author.Player;
+            if (player != null && player.HasPermission(UsePermission))
+            {
+                return true;
+            }
+
+            if (message.Member != null)
+            {
+                foreach (Snowflake role in _pluginConfig.AllowedRoles)
+                {
+                    if (message.Member.Roles.Contains(role))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
         #endregion
 
@@ -214,8 +226,8 @@ namespace Oxide.Plugins
             public bool AllowInDm { get; set; }
             
             [DefaultValue(false)]
-            [JsonProperty(PropertyName = "Require User To Be Linked To Use Command")]
-            public bool RequiredLink { get; set; }
+            [JsonProperty(PropertyName = "Require Permissions To Use Command")]
+            public bool RequirePermissions { get; set; }
 
             [DefaultValue(false)]
             [JsonProperty(PropertyName = "Allow Discord Commands In Guild")]
@@ -224,7 +236,7 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Allow Guild Commands Only In The Following Guild Channel Or Category (Channel ID Or Category ID)")]
             public List<Snowflake> AllowedChannels { get; set; }
             
-            [JsonProperty(PropertyName = "Allow Guild Commands for members having role (Role ID)")]
+            [JsonProperty(PropertyName = "Allow Commands for members having role (Role ID)")]
             public List<Snowflake> AllowedRoles { get; set; }
 
             [DefaultValue("\n")]

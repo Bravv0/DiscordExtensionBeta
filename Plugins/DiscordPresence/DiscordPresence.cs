@@ -101,69 +101,27 @@ namespace Oxide.Plugins
         {
             config.StatusMessages = config.StatusMessages ?? new List<MessageSettings>
             {
-                new MessageSettings
-                {
-                    Message = "on {server.name}",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "{server.players}/{server.players.max} Players",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "{server.players.sleepers} Sleepers",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "{server.players.stored} Total Players",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "Server FPS {server.fps}",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "{server.entities} Entities",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "{server.players.total} Lifetime Players",
-                    Type = ActivityType.Game
-                },
-#if RUST
-                new MessageSettings
-                {
-                    Message = "{server.entities} Entities",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "{server.players.queued} Queued",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "{server.players.loading} Joining",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "Wiped: {server.map.wipe.last!local}",
-                    Type = ActivityType.Game
-                },
-                new MessageSettings
-                {
-                    Message = "Size: {world.size} Seed: {world.seed}",
-                    Type = ActivityType.Game
-                }
-#endif
+                new MessageSettings("on {server.name}", ActivityType.Game),
+                new MessageSettings("{server.players}/{server.players.max} Players", ActivityType.Game),
+                new MessageSettings("{server.players.sleepers} Sleepers", ActivityType.Game),
+                new MessageSettings("{server.players.stored} Total Players", ActivityType.Game),
+                new MessageSettings("Server FPS {server.fps}", ActivityType.Game),
+                new MessageSettings("{server.entities} Entities", ActivityType.Game),
+                new MessageSettings("{server.players.total} Lifetime Players", ActivityType.Game),
+                #if RUST
+                new MessageSettings("{server.entities} Entities", ActivityType.Game),
+                new MessageSettings("{server.players.queued} Queued", ActivityType.Game),
+                new MessageSettings("{server.players.loading} Joining", ActivityType.Game),
+                new MessageSettings("Wiped: {server.map.wipe.last!local}", ActivityType.Game),
+                new MessageSettings("Size: {world.size} Seed: {world.seed}", ActivityType.Game)
+                #endif
             };
+
+            for (int index = 0; index < config.StatusMessages.Count; index++)
+            {
+                config.StatusMessages[index] = new MessageSettings(config.StatusMessages[index]);
+            }
+
             return config;
         }
 
@@ -243,6 +201,24 @@ namespace Oxide.Plugins
             [JsonConverter(typeof(StringEnumConverter))]
             [DefaultValue(ActivityType.Game)]
             public ActivityType Type { get; set; }
+
+            [JsonConstructor]
+            public MessageSettings()
+            {
+                
+            }
+            
+            public MessageSettings(string message, ActivityType type)
+            {
+                Message = message;
+                Type = type;
+            }
+            
+            public MessageSettings(MessageSettings settings)
+            {
+                Message = settings?.Message ?? string.Empty;
+                Type = settings?.Type ?? ActivityType.Game;
+            }
         }
         #endregion
     }

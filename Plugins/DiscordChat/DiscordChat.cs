@@ -6,6 +6,7 @@ using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Oxide.Core;
+using Oxide.Core.Libraries;
 using Oxide.Core.Libraries.Covalence;
 using Oxide.Core.Plugins;
 using Oxide.Ext.Discord;
@@ -21,7 +22,6 @@ using Oxide.Ext.Discord.Entities.Messages.AllowedMentions;
 using Oxide.Ext.Discord.Entities.Users;
 using Oxide.Ext.Discord.Libraries.Subscription;
 using Oxide.Ext.Discord.Logging;
-using UnityEngine;
 #if RUST
 using ConVar;
 #endif
@@ -111,7 +111,9 @@ namespace Oxide.Plugins
 
         private PluginConfig AdditionalConfig(PluginConfig config)
         {
-            config.PluginSupport.ChatTranslator.DiscordServerLanguage = config.PluginSupport.ChatTranslator.DiscordServerLanguage ?? lang.GetServerLanguage();
+            config.ChannelSettings = new ChannelSettings(config.ChannelSettings);
+            config.MessageSettings = new MessageSettings(config.MessageSettings);
+            config.PluginSupport = new PluginSupport(config.PluginSupport);
             return config;
         }
 
@@ -331,8 +333,8 @@ namespace Oxide.Plugins
             {
                 return;
             }
-
-            #if RUST
+            
+#if RUST
             if (channel == (int) Chat.ChatChannel.Team)
             {
                 SendMessageToDiscordTeamChannel(player, message);
@@ -476,20 +478,21 @@ namespace Oxide.Plugins
                 });
             }
 
+            string parsedMessage = content.ToString();
             bool playerReturn = false;
 #if RUST
             //Let other chat plugins process first
             if (player.Object != null)
             {
                 Unsubscribe(nameof(OnPlayerChat));
-                playerReturn = Interface.Call(nameof(OnPlayerChat), player.Object, content, Chat.ChatChannel.Global) != null;
+                playerReturn = Interface.Call(nameof(OnPlayerChat), player.Object, parsedMessage, Chat.ChatChannel.Global) != null;
                 Subscribe(nameof(OnPlayerChat));
             }
 #endif
 
             //Let other chat plugins process first
             Unsubscribe("OnUserChat");
-            bool userReturn = Interface.Call("OnUserChat", player, content) != null;
+            bool userReturn = Interface.Call("OnUserChat", player, parsedMessage) != null;
             Subscribe("OnUserChat");
 
             if (playerReturn || userReturn)
@@ -497,7 +500,7 @@ namespace Oxide.Plugins
                 return;
             }
 
-            string parsedMessage = content.ToString();
+            
             //We need to process here because player.Object can be null
             if (BetterChat != null)
             {
@@ -604,11 +607,11 @@ namespace Oxide.Plugins
             IPlayer player = message.Author.Player;
             if (player == null)
             {
-                message.Reply(_client, LangKeys.Discord.AdminChat.NotLinked, notlinked =>
+                message.Reply(_client, LangKeys.Discord.AdminChat.NotLinked, notLinked =>
                 {
                     timer.In(1f, () =>
                     {
-                        notlinked.DeleteMessage(_client);
+                        notLinked.DeleteMessage(_client);
                     });
                 });
                 return;
@@ -799,7 +802,7 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Discord Bot Token")]
             public string DiscordApiKey { get; set; } = string.Empty;
 
-            [JsonProperty(PropertyName = "Discord Server ID")]
+            [JsonProperty(PropertyName = "Discord Server ID (Optional if bot only in 1 guild)")]
             public Snowflake GuildId { get; set; }
 
             [DefaultValue(true)]
@@ -807,13 +810,13 @@ namespace Oxide.Plugins
             public bool EnableServerChatTag { get; set; } = true;
             
             [JsonProperty("Channel Settings")]
-            public ChannelSettings ChannelSettings { get; set; } = new ChannelSettings();
+            public ChannelSettings ChannelSettings { get; set; }
 
             [JsonProperty("Message Settings")]
-            public MessageSettings MessageSettings { get; set; } = new MessageSettings();
+            public MessageSettings MessageSettings { get; set; }
             
             [JsonProperty("Plugin Support")]
-            public PluginSupport PluginSupport { get; set; } = new PluginSupport();
+            public PluginSupport PluginSupport { get; set; }
 
             [JsonConverter(typeof(StringEnumConverter))]
             [DefaultValue(LogLevel.Info)]
@@ -833,65 +836,107 @@ namespace Oxide.Plugins
 
             [JsonProperty("Join / Leave Channel ID")]
             public Snowflake JoinLeaveChannel { get; set; }
+
+            public ChannelSettings(ChannelSettings settings)
+            {
+                ChatChannel = settings?.ChatChannel ?? default(Snowflake);
+                JoinLeaveChannel = settings?.ChatChannel ?? default(Snowflake);
+                #if RUST
+                TeamChannel = settings?.TeamChannel ?? default(Snowflake);
+                #endif
+            }
         }
 
         public class MessageSettings
         {
             [JsonProperty("Replace Discord User Message With Bot Message")]
-            public bool UseBotMessageDisplay { get; set; } = true;
+            public bool UseBotMessageDisplay { get; set; }
 
             [JsonProperty("Send Messages From Server Chat To Discord Channel")]
-            public bool ServerToDiscord { get; set; } = true;
+            public bool ServerToDiscord { get; set; }
 
             [JsonProperty("Send Messages From Discord Channel To Server Chat")]
-            public bool DiscordToServer { get; set; } = true;
+            public bool DiscordToServer { get; set; }
 
             [JsonProperty("Discord Message Server Time Offset (Hours)")]
             public float ServerTimeOffset { get; set; }
 
             [JsonProperty("Text Replacements")]
-            public Hash<string, string> TextReplacements { get; set; } = new Hash<string, string> {["TextToBeReplaced"] = "ReplacedText"};
+            public Hash<string, string> TextReplacements { get; set; }
 
             [JsonProperty("Unlinked Settings")]
-            public UnlinkedSettings UnlinkedSettings { get; set; } = new UnlinkedSettings();
+            public UnlinkedSettings UnlinkedSettings { get; set; }
 
             [JsonProperty("Message Filter Settings")]
-            public MessageFilterSettings Filter { get; set; } = new MessageFilterSettings();
+            public MessageFilterSettings Filter { get; set; }
+
+            public MessageSettings(MessageSettings settings)
+            {
+                UseBotMessageDisplay = settings?.UseBotMessageDisplay ?? true;
+                ServerToDiscord = settings?.ServerToDiscord ?? true;
+                DiscordToServer = settings?.DiscordToServer ?? true;
+                ServerTimeOffset = settings?.ServerTimeOffset ?? 0f;
+                TextReplacements = settings?.TextReplacements ?? new Hash<string, string> {["TextToBeReplaced"] = "ReplacedText"};
+                UnlinkedSettings = new UnlinkedSettings(settings?.UnlinkedSettings);
+                Filter = new MessageFilterSettings(settings?.Filter);
+            }
         }
 
         public class UnlinkedSettings
         {
             [JsonProperty("Allow Unlinked Players To Chat With Server")]
-            public bool AllowedUnlinked { get; set; } = true;
+            public bool AllowedUnlinked { get; set; }
 
 #if RUST
             [JsonProperty("Steam Icon ID")]
-            public ulong SteamIcon { get; set; } = 76561199144296099;
+            public ulong SteamIcon { get; set; }
 #endif
+
+            public UnlinkedSettings(UnlinkedSettings settings)
+            {
+                AllowedUnlinked = settings?.AllowedUnlinked ?? true;
+                #if RUST
+                SteamIcon = settings?.SteamIcon ?? 76561199144296099;
+                #endif
+            }
         }
 
         public class MessageFilterSettings
         {
             [JsonProperty("Ignore messages from users in this list (Discord ID)")]
-            public List<Snowflake> IgnoreUsers { get; set; } = new List<Snowflake>();
+            public List<Snowflake> IgnoreUsers { get; set; }
             
             [JsonProperty("Ignore messages from users in this role (Role ID)")]
-            public List<Snowflake> IgnoreRoles { get; set; } = new List<Snowflake>();
+            public List<Snowflake> IgnoreRoles { get; set; }
 
             [JsonProperty("Ignored Prefixes")]
-            public List<string> IgnoredPrefixes { get; set; } = new List<string>();
+            public List<string> IgnoredPrefixes { get; set; }
+            
+            public MessageFilterSettings(MessageFilterSettings settings)
+            {
+                IgnoreUsers = settings?.IgnoreUsers ?? new List<Snowflake>();
+                IgnoreRoles = settings?.IgnoreRoles ?? new List<Snowflake>();
+                IgnoredPrefixes = settings?.IgnoredPrefixes ?? new List<string>();
+            }
         }
         
         public class PluginSupport
         {
             [JsonProperty("AdminChat Settings")]
-            public AdminChatSettings AdminChat { get; set; } = new AdminChatSettings();
+            public AdminChatSettings AdminChat { get; set; }
 
             [JsonProperty("ChatTranslator Settings")]
-            public ChatTranslatorSettings ChatTranslator { get; set; } = new ChatTranslatorSettings();
+            public ChatTranslatorSettings ChatTranslator { get; set; }
 
             [JsonProperty("AntiSpamNames Settings")]
-            public AntiSpamNamesSettings AntiSpamNames { get; set; } = new AntiSpamNamesSettings();
+            public AntiSpamNamesSettings AntiSpamNames { get; set; }
+
+            public PluginSupport(PluginSupport settings)
+            {
+                AdminChat = new AdminChatSettings(settings?.AdminChat);
+                ChatTranslator = new ChatTranslatorSettings(settings?.ChatTranslator);
+                AntiSpamNames = new AntiSpamNamesSettings(settings?.AntiSpamNames);
+            }
         }
 
         public class AdminChatSettings
@@ -900,32 +945,54 @@ namespace Oxide.Plugins
             public bool Enabled { get; set; }
 
             [JsonProperty("Exclude From Chat Channel")]
-            public bool ExcludeDefault { get; set; } = true;
+            public bool ExcludeDefault { get; set; }
 
             [JsonProperty("Admin Chat Channel ID")]
             public Snowflake ChatChannel { get; set; }
 
             [JsonProperty("Admin Chat Prefix")]
-            public string AdminChatPrefix { get; set; } = "@";
+            public string AdminChatPrefix { get; set; }
+
+            public AdminChatSettings(AdminChatSettings settings)
+            {
+                Enabled = settings?.Enabled ?? false;
+                ExcludeDefault = settings?.ExcludeDefault ?? true;
+                ChatChannel = settings?.ChatChannel ?? default(Snowflake);
+                AdminChatPrefix = settings?.AdminChatPrefix ?? "@";
+            }
         }
 
         public class ChatTranslatorSettings
         {
             [JsonProperty("Discord Server Chat Language")]
             public string DiscordServerLanguage { get; set; }
+
+            public ChatTranslatorSettings(ChatTranslatorSettings settings)
+            {
+                DiscordServerLanguage = settings?.DiscordServerLanguage ?? Interface.Oxide.GetLibrary<Lang>().GetServerLanguage();   
+            }
         }
         
         public class AntiSpamNamesSettings
         {
             [JsonProperty("Use AntiSpamNames On Player Names")]
-            public bool ValidateNicknames { get; set; } = false;
+            public bool ValidateNicknames { get; set; }
 
             [JsonProperty("Use AntiSpamNames On Chat Messages")]
-            public bool ChatMessage { get; set; } = false;
+            public bool ChatMessage { get; set; }
             #if RUST
             [JsonProperty("Use AntiSpamNames On Team Messages")]
-            public bool TeamMessage { get; set; } = false;
+            public bool TeamMessage { get; set; }
             #endif
+
+            public AntiSpamNamesSettings(AntiSpamNamesSettings settings)
+            {
+                ValidateNicknames = settings?.ValidateNicknames ?? false;
+                ChatMessage = settings?.ChatMessage ?? false;
+                #if RUST
+                TeamMessage = settings?.TeamMessage ?? false;
+                #endif
+            }
         }
 
         public class DiscordTimedSend

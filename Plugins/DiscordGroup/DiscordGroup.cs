@@ -13,7 +13,7 @@ using Oxide.Ext.Discord.Entities;
 using Oxide.Ext.Discord.Entities.Gatway;
 using Oxide.Ext.Discord.Entities.Gatway.Events;
 using Oxide.Ext.Discord.Entities.Guilds;
-using Oxide.Ext.Discord.Entities.Roles;
+using Oxide.Ext.Discord.Entities.Permissions;
 using Oxide.Ext.Discord.Entities.Users;
 using Oxide.Ext.Discord.Extensions;
 using Oxide.Ext.Discord.Libraries.Linking;
@@ -55,6 +55,12 @@ namespace Oxide.Plugins
         
         private void OnServerInitialized()
         {
+            if (string.IsNullOrEmpty(_pluginConfig.DiscordApiKey))
+            {
+                PrintWarning("Please set the Discord Bot Token and reload the plugin");
+                return;
+            }
+            
             _client.Connect(_discordSettings);
         }
 
@@ -302,7 +308,7 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Discord Bot Token")]
             public string DiscordApiKey { get; set; }
             
-            [JsonProperty(PropertyName = "Discord Server ID")]
+            [JsonProperty(PropertyName = "Discord Server ID (Optional if bot only in 1 guild)")]
             public Snowflake GuildId { get; set; }
             
             [JsonProperty("Add To Discord Role (Role ID)")]

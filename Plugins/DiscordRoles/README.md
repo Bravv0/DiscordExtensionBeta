@@ -3,6 +3,11 @@
 * Allows BI Directional syncing of Discord Roles and Oxide Groups.
 * Announcements can be sent out in game chat and discord chat when a sync occurs.
 
+## Discord Link
+This plugin supports Discord Link provided by the Discord Extension.
+This plugin will work with any plugin that provides linked player data through Discord Link.
+
+
 ### Multi Game Server Support
 
 This plugin can work across multiple game server to one discord server. 
@@ -13,7 +18,7 @@ The only limitation is you cannot have multiple game servers syncing an oxide gr
 ```json
 {
   "Discord Bot Token": "",
-  "Discord Server ID": "",
+  "Discord Server ID (Optional if bot only in 1 guild)": "",
   "Sync Nicknames": false,
   "Update Rate (Seconds)": 2.0,
   "Use AntiSpamNames On Discord Nickname": false,

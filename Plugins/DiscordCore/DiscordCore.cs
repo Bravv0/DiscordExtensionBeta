@@ -16,7 +16,6 @@ using Oxide.Ext.Discord.Entities.Applications;
 using Oxide.Ext.Discord.Entities.Channels;
 using Oxide.Ext.Discord.Entities.Emojis;
 using Oxide.Ext.Discord.Entities.Gatway;
-using Oxide.Ext.Discord.Entities.Gatway.Commands;
 using Oxide.Ext.Discord.Entities.Gatway.Events;
 using Oxide.Ext.Discord.Entities.Guilds;
 using Oxide.Ext.Discord.Entities.Interactions;
@@ -62,7 +61,6 @@ namespace Oxide.Plugins
         private readonly List<LinkActivation> _activations = new List<LinkActivation>();
         private readonly List<Snowflake> _allowedCommandChannels = new List<Snowflake>();
         private readonly List<string> _allowedCommandChannelNames = new List<string>();
-        private readonly Hash<string, JoinSearchRequest> _searchRequests = new Hash<string, JoinSearchRequest>();
         private char _cmdPrefix;
         
         private readonly DiscordLink _link = Interface.Oxide.GetLibrary<DiscordLink>();
@@ -76,7 +74,6 @@ namespace Oxide.Plugins
         private const string LinkAccountsButtonId = nameof(DiscordCore) + "_LinkAccounts";
         private const string AcceptLinkButtonId = nameof(DiscordCore) + "_AcceptLink";
         private const string DeclineLinkButtonId = nameof(DiscordCore) + "_DeclineLink";
-        private const string RequestMemberSearch = "DC_Search";
         #endregion
 
         #region Setup & Loading
@@ -108,20 +105,7 @@ namespace Oxide.Plugins
 
         public PluginConfig AdditionalConfig(PluginConfig config)
         {
-            config.LinkSettings = new DiscordLinkingSettings
-            {
-                AnnouncementChannel = config.LinkSettings?.AnnouncementChannel ?? default(Snowflake),
-                LinkCodeCharacters = config.LinkSettings?.LinkCodeCharacters ?? "123456789",
-                LinkCodeLength = config.LinkSettings?.LinkCodeLength ?? 6,
-                AllowCommandsInGuild = config.LinkSettings?.AllowCommandsInGuild ?? false,
-                AllowCommandInChannels = config.LinkSettings?.AllowCommandInChannels ?? new List<Snowflake>(),
-                LinkMessageSettings = new LinkMessageSettings
-                {
-                    Enabled = config.LinkSettings?.LinkMessageSettings?.Enabled ?? false,
-                    ChannelId = config.LinkSettings?.LinkMessageSettings?.ChannelId ??  default(Snowflake)
-                }
-            };
-
+            config.LinkSettings = new DiscordLinkingSettings(config.LinkSettings);
             return config;
         }
 
@@ -145,6 +129,7 @@ namespace Oxide.Plugins
                 [LangKeys.Commands.Join.Errors.AlreadySignedUp] = $"You have already linked your discord and game accounts. If you wish to remove this link type [#{AccentColor}]{{0}}{{1}} {{2}}[/#]",
                 [LangKeys.Commands.Join.Errors.UnableToFindUser] = $"Unable to find user '{{0}}' in the {{1}} discord server. Have you joined the {{1}} discord server @ [#{AccentColor}]discord.gg/{{2}}[/#]?",
                 [LangKeys.Commands.Join.Errors.FoundMultipleUsers] = "Found multiple users with username '{0}' in the {1} discord server. Please include more of the username and discriminator if possible.",
+                [LangKeys.Commands.Join.Errors.UsernameSearchError] = "An error occured while trying to search by username. Please try a different username or try again later.",
                 [LangKeys.Commands.Join.Errors.InvalidSyntax] = $"Invalid syntax. Type [#{AccentColor}]{{0}}{{1}} code 123456[/#] where 123456 is the code you got from discord",
                 [LangKeys.Commands.Join.Errors.NoPendingActivations] = "There is no link currently in progress with the code '{0}'. Please confirm your code and try again.",
                 [LangKeys.Commands.Join.Errors.LinkInProgress] = "You already have an existing link in process. Please continue from that link.",
@@ -400,59 +385,49 @@ namespace Oxide.Plugins
                 return;
             }
             
-            string nonce = $"{RequestMemberSearch} {Random.Range(0, 100000):D5}";
-
-            while (_searchRequests.ContainsKey(nonce))
-            {
-                nonce = $"{RequestMemberSearch} {Random.Range(0, 100000):D5}";
-            }
-
-            _searchRequests[nonce] = new JoinSearchRequest
-            {
-                Player = player,
-                Username = userName
-            };
-            
             string[] userInfo = userName.Split('#');
-            _client.Bot.RequestGuildMembers(new GuildMembersRequestCommand
+            
+            _guild.SearchGuildMembers(_client, userInfo[0], 1000, members =>
             {
-                Limit = 100,
-                Nonce = nonce,
-                GuildId = _guild.Id,
-                Query = userInfo[0]
+                HandleChatJoinUserNameResults(player, userInfo, members);
+            }, error =>
+            {
+                player.Message(Lang(LangKeys.Commands.Join.Errors.UsernameSearchError, player));
             });
         }
 
-        private void HandleChatJoinWithUserNameResults(GuildMembersChunkEvent chunk)
+        private void HandleChatJoinUserNameResults(IPlayer player, string[] userInfo, List<GuildMember> members)
         {
-            JoinSearchRequest request = _searchRequests[chunk.Nonce];
-            if (request == null)
+            if (members.Count == 0)
             {
-                return;
-            }
-            
-            _searchRequests.Remove(chunk.Nonce);
-            IPlayer player = request.Player;
-            string userName = request.Username;
-            if (chunk.Members.Count == 0)
-            {
-                Chat(player, LangKeys.Commands.Join.Errors.UnableToFindUser, userName, GetDiscordServerName(), _pluginConfig.JoinCode);
+                Chat(player, LangKeys.Commands.Join.Errors.UnableToFindUser, userInfo[0], GetDiscordServerName(), _pluginConfig.JoinCode);
                 return;
             }
 
             DiscordUser user = null;
 
             int count = 0;
-            foreach (GuildMember member in chunk.Members)
+            string userName = userInfo[0];
+            string discriminator = userInfo.Length > 1 ? userInfo[1] : null;
+            foreach (GuildMember member in members)
             {
-                if (member.User.GetFullUserName.StartsWith(userName, StringComparison.OrdinalIgnoreCase))
+                DiscordUser searchUser = member.User;
+                if (discriminator == null)
                 {
-                    user = member.User;
-                    count++;
-                    if (count > 1)
+                    if (searchUser.Username.StartsWith(userName, StringComparison.OrdinalIgnoreCase))
                     {
-                        break;
+                        user = searchUser;
+                        count++;
+                        if (count > 1)
+                        {
+                            break;
+                        }
                     }
+                }
+                else if (searchUser.Username.Equals(userName, StringComparison.OrdinalIgnoreCase) && searchUser.Discriminator.Equals(discriminator))
+                {
+                    user = searchUser;
+                    break;
                 }
             }
 
@@ -504,7 +479,7 @@ namespace Oxide.Plugins
             LinkActivation act = _activations.FirstOrDefault(a => a.Code == args[1]);
             if (act == null)
             {
-                Chat(player, Lang(LangKeys.Commands.Join.Errors.NoPendingActivations, player));
+                Chat(player, Lang(LangKeys.Commands.Join.Errors.NoPendingActivations, player, args[1]));
                 return;
             }
 
@@ -679,12 +654,11 @@ namespace Oxide.Plugins
                     _initialized = true;
                 }
                 
-                Puts($"{_guild.Members.Count} Total Discord Members Loaded");
+                Puts($"Loaded {_guild.Members.Count} Discord Members");
 
                 HandleLeaveRejoin();
                 SetupGuildLinkMessage();
-                
-                
+
                 foreach (Snowflake id in _pluginConfig.LinkSettings.AllowCommandInChannels)
                 {
                     DiscordChannel channel = _guild.Channels[id];
@@ -694,7 +668,7 @@ namespace Oxide.Plugins
                         _allowedCommandChannelNames.Add(channel.Name);
                     }
                 }
-
+                
                 RegisterDiscordLangCommand(nameof(DiscordCoreMessageCommand), CommandKeys.DiscordCommand, true, _pluginConfig.LinkSettings.AllowCommandsInGuild, _allowedCommandChannels);
                 
                 DiscordCoreReady(null);
@@ -703,15 +677,6 @@ namespace Oxide.Plugins
             catch (Exception ex)
             {
                 PrintError($"Failed to connect to guild: {ex}");
-            }
-        }
-        
-        [HookMethod(DiscordHooks.OnDiscordGuildMembersChunk)]
-        private void OnDiscordGuildMembersChunk(GuildMembersChunkEvent chunk, DiscordGuild guild)
-        {
-            if (chunk.Nonce.StartsWith(RequestMemberSearch))
-            {
-                HandleChatJoinWithUserNameResults(chunk);
             }
         }
 
@@ -748,7 +713,7 @@ namespace Oxide.Plugins
         [HookMethod(DiscordHooks.OnDiscordInteractionCreated)]
         private void OnDiscordInteractionCreated(DiscordInteraction interaction)
         {
-            if (interaction.Type != InteractionRequestType.MessageComponent)
+            if (interaction.Type != InteractionType.MessageComponent)
             {
                 return;
             }
@@ -778,7 +743,7 @@ namespace Oxide.Plugins
 
         public void HandleLinkAccountsButton(DiscordInteraction interaction)
         {
-            interaction.CreateResponse(_client, new InteractionResponse
+            interaction.CreateInteractionResponse(_client, new InteractionResponse
             {
                 Type = InteractionResponseType.DeferredUpdateMessage
             });
@@ -811,7 +776,7 @@ namespace Oxide.Plugins
         
         private void HandleAcceptLinkButton(DiscordInteraction interaction, string[] args)
         {
-            interaction.CreateResponse(_client, new InteractionResponse
+            interaction.CreateInteractionResponse(_client, new InteractionResponse
             {
                 Type = InteractionResponseType.DeferredUpdateMessage
             });
@@ -832,7 +797,7 @@ namespace Oxide.Plugins
         
         private void HandleDeclineLinkButton(DiscordInteraction interaction, string[] args)
         {
-            interaction.CreateResponse(_client, new InteractionResponse
+            interaction.CreateInteractionResponse(_client, new InteractionResponse
             {
                 Type = InteractionResponseType.DeferredUpdateMessage
             });
@@ -1169,7 +1134,7 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Discord Bot Token")]
             public string ApiKey { get; set; }
             
-            [JsonProperty(PropertyName = "Discord Server ID")]
+            [JsonProperty(PropertyName = "Discord Server ID (Optional if bot only in 1 guild)")]
             public Snowflake GuildId { get; set; }
 
             [DefaultValue("")]
@@ -1212,6 +1177,16 @@ namespace Oxide.Plugins
             
             [JsonProperty(PropertyName = "Guild Link Message Settings")]
             public LinkMessageSettings LinkMessageSettings { get; set; }
+
+            public DiscordLinkingSettings(DiscordLinkingSettings settings)
+            {
+                LinkCodeCharacters = settings?.LinkCodeCharacters ?? "123456789";
+                LinkCodeLength = settings?.LinkCodeLength ?? 6;
+                AllowCommandsInGuild = settings?.AllowCommandsInGuild ?? false;
+                AllowCommandInChannels = settings?.AllowCommandInChannels ?? new List<Snowflake>();
+                AnnouncementChannel = settings?.AnnouncementChannel ?? default(Snowflake);
+                LinkMessageSettings = new LinkMessageSettings(settings?.LinkMessageSettings);
+            }
         }
 
         public class LinkMessageSettings
@@ -1223,6 +1198,12 @@ namespace Oxide.Plugins
             [DefaultValue(true)]
             [JsonProperty(PropertyName = "Message Channel ID")]
             public Snowflake ChannelId { get; set; }
+
+            public LinkMessageSettings(LinkMessageSettings settings)
+            {
+                Enabled = settings?.Enabled ?? false;
+                ChannelId = settings?.ChannelId ?? default(Snowflake);
+            }
         }
 
         public class StoredData
@@ -1338,6 +1319,7 @@ namespace Oxide.Plugins
                         public const string AlreadySignedUp = Base + nameof(AlreadySignedUp);
                         public const string UnableToFindUser = Base + nameof(UnableToFindUser);
                         public const string FoundMultipleUsers = Base + nameof(FoundMultipleUsers);
+                        public const string UsernameSearchError = Base + nameof(UsernameSearchError);
                         public const string InvalidSyntax = Base + nameof(InvalidSyntax);
                         public const string NoPendingActivations = Base + nameof(NoPendingActivations);
                         public const string LinkInProgress = Base + nameof(LinkInProgress);
@@ -1348,7 +1330,7 @@ namespace Oxide.Plugins
 
             public static class Linking
             {
-                private const string Base = "Linking";
+                private const string Base = nameof(Linking) + ".";
 
                 public static class Chat
                 {

@@ -4,6 +4,10 @@
 * The players must have linked their discord and game accounts first
 * All discord private messages will be send by the bot in a private message
 
+## Discord Link
+This plugin supports Discord Link provided by the Discord Extension.
+This plugin will work with any plugin that provides linked player data through Discord Link.
+
 ## Chat Commands
 
 * `/pm MJSU Hi` -- will send a private message to MJSU wit the text Hi

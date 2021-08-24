@@ -16,7 +16,7 @@ using Oxide.Ext.Discord.Entities.Gatway;
 using Oxide.Ext.Discord.Entities.Gatway.Events;
 using Oxide.Ext.Discord.Entities.Guilds;
 using Oxide.Ext.Discord.Entities.Messages;
-using Oxide.Ext.Discord.Entities.Roles;
+using Oxide.Ext.Discord.Entities.Permissions;
 using Oxide.Ext.Discord.Entities.Users;
 using Oxide.Ext.Discord.Extensions;
 using Oxide.Ext.Discord.Libraries.Linking;
@@ -107,27 +107,13 @@ namespace Oxide.Plugins
         {
             config.SyncData = config.SyncData ?? new List<SyncData>
             {
-                new SyncData
-                {
-                    ServerGroup = "Default",
-                    DiscordRole = default(Snowflake),
-                    Source = Source.Server
-                },
-                new SyncData
-                {
-                    ServerGroup = "VIP",
-                    DiscordRole = default(Snowflake),
-                    Source = Source.Discord
-                }
+                new SyncData("Default", default(Snowflake), Source.Server),
+                new SyncData("VIP", default(Snowflake), Source.Discord)
             };
 
-            foreach (SyncData data in config.SyncData)
+            for (int index = 0; index < config.SyncData.Count; index++)
             {
-                //Add new field to old data
-                if (data.Notifications == null)
-                {
-                    data.Notifications = new NotificationSettings();
-                }
+                config.SyncData[index] = new SyncData(config.SyncData[index]);
             }
 
             return config;
@@ -746,7 +732,7 @@ namespace Oxide.Plugins
             [JsonProperty(PropertyName = "Discord Bot Token")]
             public string DiscordApiKey { get; set; }
             
-            [JsonProperty(PropertyName = "Discord Server ID")]
+            [JsonProperty(PropertyName = "Discord Server ID (Optional if bot only in 1 guild)")]
             public Snowflake GuildId { get; set; }
             
             [DefaultValue(false)]
@@ -789,6 +775,28 @@ namespace Oxide.Plugins
 
             [JsonProperty(PropertyName = "Sync Notification Settings")]
             public NotificationSettings Notifications { get; set; }
+
+            [JsonConstructor]
+            public SyncData()
+            {
+                
+            }
+            
+            public SyncData(string serverGroup, Snowflake discordRole, Source source)
+            {
+                ServerGroup = serverGroup;
+                DiscordRole = discordRole;
+                Source = source;
+                Notifications = new NotificationSettings();
+            }
+
+            public SyncData(SyncData settings)
+            {
+                ServerGroup = settings?.ServerGroup ?? string.Empty;
+                DiscordRole = settings?.DiscordRole ?? default(Snowflake);
+                Source = settings?.Source ?? Source.Server;
+                Notifications = new NotificationSettings(settings?.Notifications);
+            }
         }
 
         public class NotificationSettings
@@ -809,16 +817,42 @@ namespace Oxide.Plugins
             public bool SendMessageOnRemove { get; set; }
 
             [JsonProperty(PropertyName = "Server Message Added Override Message")]
-            public string ServerMessageAddedOverride { get; set; } = string.Empty;
+            public string ServerMessageAddedOverride { get; set; }
 
             [JsonProperty(PropertyName = "Server Message Removed Override Message")]
-            public string ServerMessageRemovedOverride { get; set; } = string.Empty;
+            public string ServerMessageRemovedOverride { get; set; }
 
             [JsonProperty(PropertyName = "Discord Message Added Override Message")]
-            public string DiscordMessageAddedOverride { get; set; } = string.Empty;
+            public string DiscordMessageAddedOverride { get; set; }
 
             [JsonProperty(PropertyName = "Discord Message Removed Override Message")]
-            public string DiscordMessageRemovedOverride { get; set; } = string.Empty;
+            public string DiscordMessageRemovedOverride { get; set; }
+
+            public NotificationSettings()
+            {
+                SendMessageToServer = false;
+                SendMessageToDiscord = false;
+                DiscordMessageChannelId = default(Snowflake);
+                SendMessageOnAdd = false;
+                SendMessageOnRemove = false;
+                ServerMessageAddedOverride = string.Empty;
+                ServerMessageRemovedOverride = string.Empty;
+                DiscordMessageAddedOverride = string.Empty;
+                DiscordMessageRemovedOverride = string.Empty;
+            }
+
+            public NotificationSettings(NotificationSettings settings)
+            {
+                SendMessageToServer = settings?.SendMessageToServer ?? false;
+                SendMessageToDiscord = settings?.SendMessageToDiscord ?? false;
+                DiscordMessageChannelId = settings?.DiscordMessageChannelId ?? default(Snowflake);
+                SendMessageOnAdd = settings?.SendMessageToServer ?? false;
+                SendMessageOnRemove = settings?.SendMessageToServer ?? false;
+                ServerMessageAddedOverride = settings?.ServerMessageAddedOverride ?? string.Empty;
+                ServerMessageRemovedOverride = settings?.ServerMessageRemovedOverride ?? string.Empty;
+                DiscordMessageAddedOverride = settings?.DiscordMessageAddedOverride ?? string.Empty;
+                DiscordMessageRemovedOverride = settings?.DiscordMessageRemovedOverride ?? string.Empty;
+            }
         }
 
         public class PlayerSync
